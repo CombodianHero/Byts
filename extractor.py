@@ -6,7 +6,10 @@ import time
 import json
 import requests
 from typing import List, Dict, Any, Optional
-from config import API_BASE, ENDPOINTS, HEADERS, STORAGE_PDF, STORAGE_VID, PLAYER_URL, LIVE_URL
+from config import (
+    API_BASE, API_BASE_ALT1, API_BASE_ALT2, API_BASE_ALT3,
+    ENDPOINTS, HEADERS, STORAGE_PDF, STORAGE_VID, PLAYER_URL, LIVE_URL
+)
 
 
 class BridgeExtractor:
@@ -21,17 +24,39 @@ class BridgeExtractor:
             self.session.headers["Authorization"] = f"Bearer {token}"
     
     def _api_call(self, endpoint_key: str, method: str = "POST", data: Dict = None, params: Dict = None) -> Dict:
-        """Make API call with optional authentication"""
-        url = API_BASE + ENDPOINTS.get(endpoint_key, endpoint_key)
-        try:
-            if method.upper() == "POST":
-                resp = self.session.post(url, json=data, params=params, timeout=30)
-            else:
-                resp = self.session.get(url, params=params, timeout=30)
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as e:
-            return {"status": 0, "message": str(e)}
+        """Make API call with fallback to alternative bases"""
+        bases = [API_BASE, API_BASE_ALT1, API_BASE_ALT2, API_BASE_ALT3]
+        endpoint = ENDPOINTS.get(endpoint_key, endpoint_key)
+        
+        # Try different endpoint name variations
+        endpoint_variations = [
+            endpoint,
+            endpoint.replace("-", "_"),
+            endpoint.replace("_", "-"),
+            endpoint.replace("get-", ""),
+            endpoint.replace("get_", ""),
+        ]
+        
+        for base in bases:
+            for ep in set(endpoint_variations):
+                url = base + ep
+                try:
+                    if method.upper() == "POST":
+                        resp = self.session.post(url, json=data, params=params, timeout=30)
+                    else:
+                        resp = self.session.get(url, params=params, timeout=30)
+                    
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        if result.get("status") == 1 or result.get("success") is True:
+                            return result
+                        # If status is 0 but we got a response, it might still work
+                        if "data" in result:
+                            return result
+                except Exception as e:
+                    continue
+        
+        return {"status": 0, "message": "All API endpoints failed"}
     
     def _extract_video_url(self, video_data: Dict) -> str:
         """Extract video URL from various response formats"""
@@ -75,7 +100,7 @@ class BridgeExtractor:
         
         # Free videos
         fv = self._api_call("free_videos", method="GET")
-        if fv.get("status") == 1:
+        if fv.get("status") == 1 or "data" in fv:
             data = fv.get("data", [])
             if isinstance(data, dict):
                 data = list(data.values())
@@ -89,7 +114,7 @@ class BridgeExtractor:
         
         # Free PDFs
         fp = self._api_call("free_pdfs", method="GET")
-        if fp.get("status") == 1:
+        if fp.get("status") == 1 or "data" in fp:
             data = fp.get("data", [])
             if isinstance(data, dict):
                 data = list(data.values())
@@ -106,24 +131,52 @@ class BridgeExtractor:
     # ─── Authentication ──────────────────────────────────────────────────
     def send_otp(self, mobile: str) -> Dict:
         """Send OTP to mobile number"""
-        return self._api_call("send_otp", data={"mobile": mobile, "type": "login"})
+        # Try different payload formats
+        payloads = [
+            {"mobile": mobile, "type": "login"},
+            {"mobile": mobile, "type": "register"},
+            {"mobile": mobile},
+            {"phone": mobile, "type": "login"},
+            {"phone": mobile},
+        ]
+        
+        for payload in payloads:
+            result = self._api_call("send_otp", data=payload)
+            if result.get("status") == 1 or result.get("success") is True:
+                return result
+        
+        return {"status": 0, "message": "Could not send OTP"}
     
     def login_with_otp(self, mobile: str, otp: str) -> Dict:
         """Login with OTP and get token"""
-        resp = self._api_call("login", data={"mobile": mobile, "otp": otp})
-        if resp.get("status") != 1:
-            resp = self._api_call("verify_otp", data={"mobile": mobile, "otp": otp})
-        if resp.get("status") == 1:
-            data = resp.get("data", {})
-            token = data.get("token") or data.get("authtoken") or data.get("api_token")
-            return {"success": True, "token": token, "user": data}
-        return {"success": False, "message": resp.get("message", "Login failed")}
+        # Try different login endpoints
+        endpoints = ["login", "verify_otp", "verify-otp"]
+        payloads = [
+            {"mobile": mobile, "otp": otp},
+            {"phone": mobile, "otp": otp},
+            {"mobile": mobile, "otp": otp, "type": "login"},
+        ]
+        
+        for endpoint in endpoints:
+            for payload in payloads:
+                # Temporarily override the endpoint
+                result = self._api_call(endpoint, data=payload)
+                if result.get("status") == 1 or result.get("success") is True:
+                    data = result.get("data", {})
+                    token = data.get("token") or data.get("authtoken") or data.get("api_token")
+                    if token:
+                        return {"success": True, "token": token, "user": data}
+        
+        return {"success": False, "message": "Login failed"}
     
-    # ─── Course Extraction (With Login) ──────────────────────────────────
+    # ─── Course Extraction ──────────────────────────────────────────────
     def get_my_courses(self) -> List[Dict]:
         """Get user's enrolled courses (requires auth)"""
+        if not self.token:
+            return []
+        
         resp = self._api_call("my_courses", method="GET")
-        if resp.get("status") != 1:
+        if resp.get("status") != 1 and "data" not in resp:
             return []
         data = resp.get("data", [])
         if isinstance(data, dict):
@@ -133,7 +186,7 @@ class BridgeExtractor:
     def get_all_courses(self) -> List[Dict]:
         """Get all available courses (may or may not require auth)"""
         resp = self._api_call("all_courses", method="GET")
-        if resp.get("status") != 1:
+        if resp.get("status") != 1 and "data" not in resp:
             return []
         data = resp.get("data", [])
         if isinstance(data, dict):
@@ -241,19 +294,19 @@ class BridgeExtractor:
         result["free"] = self.fetch_free_content()
         
         # My courses (requires auth)
-        my_courses = self.get_my_courses()
-        if my_courses:
-            result["my_courses"] = my_courses
-            for course in my_courses:
-                extracted = self.extract_course_full(course)
-                result["extracted"].extend(extracted)
+        if self.token:
+            my_courses = self.get_my_courses()
+            if my_courses:
+                result["my_courses"] = my_courses
+                for course in my_courses:
+                    extracted = self.extract_course_full(course)
+                    result["extracted"].extend(extracted)
         
         # All courses (try without auth first)
-        all_courses = self.get_all_courses()
-        if all_courses:
-            result["all_courses"] = all_courses
-            # Only extract if we haven't already extracted my courses
-            if not my_courses:
+        if not result["my_courses"]:
+            all_courses = self.get_all_courses()
+            if all_courses:
+                result["all_courses"] = all_courses
                 for course in all_courses:
                     extracted = self.extract_course_full(course)
                     result["extracted"].extend(extracted)
