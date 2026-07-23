@@ -4,7 +4,6 @@ Supports both login and no-login content extraction
 """
 import logging
 import re
-import asyncio
 from typing import Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -136,7 +135,7 @@ async def handle_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     extractor = get_extractor(user_id)
     resp = extractor.send_otp(mobile)
     
-    if resp.get("status") == 1:
+    if resp.get("status") == 1 or resp.get("success") is True:
         await update.message.reply_text(
             f"✅ OTP sent to {mobile}.\n"
             "Please enter the *OTP* you received:",
@@ -319,7 +318,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "free":
         await free_content(update, context)
     elif action == "login":
-        # Start login flow
         await login_start(update, context)
     elif action == "my_courses":
         await my_courses(update, context)
@@ -384,7 +382,7 @@ def main():
     
     print("✅ Bot is ready!")
     
-    # Start polling (no username check)
+    # Start polling
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
