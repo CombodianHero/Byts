@@ -4,6 +4,7 @@ Supports both login and no-login content extraction
 """
 import logging
 import re
+import asyncio
 from typing import Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -117,7 +118,7 @@ async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "(10 digits, no country code):",
         parse_mode="Markdown"
     )
-    return ConversationHandler.END
+    return MOBILE
 
 
 async def handle_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -127,7 +128,7 @@ async def handle_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not mobile.isdigit() or len(mobile) != 10:
         await update.message.reply_text("❌ Invalid mobile number. Enter 10 digits only.")
-        return ConversationHandler.END
+        return MOBILE
     
     context.user_data["mobile"] = mobile
     
@@ -211,7 +212,7 @@ async def my_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await msg.reply_text(
         f"📚 *Your Courses ({len(courses)})*\n\n"
-        "Use /extract_all to extract content from all courses.",
+        "Use /extract to extract content from all courses.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("📦 Extract All", callback_data="extract_all")],
@@ -315,27 +316,51 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = query.data
     
     # Map button actions to functions
-    action_map = {
-        "free": free_content,
-        "login": login_start,
-        "my_courses": my_courses,
-        "extract_all": extract_all,
-        "status": status_command,
-        "logout": logout,
-    }
-    
-    # Temporarily set callback_query to None so handlers work correctly
-    update.callback_query = None
-    
-    if action in action_map:
-        await action_map[action](update, context)
+    if action == "free":
+        await free_content(update, context)
+    elif action == "login":
+        # Start login flow
+        await login_start(update, context)
+    elif action == "my_courses":
+        await my_courses(update, context)
+    elif action == "extract_all":
+        await extract_all(update, context)
+    elif action == "status":
+        await status_command(update, context)
+    elif action == "logout":
+        await logout(update, context)
+    elif action == "back":
+        await query.message.reply_text(
+            "🎓 *Main Menu*",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
     else:
         await query.message.reply_text("❌ Unknown action.")
 
 
-# ─── Conversation Handler ──────────────────────────────────────────────
-def get_conversation_handler():
-    """Create conversation handler for login flow"""
+# ─── Main ──────────────────────────────────────────────────────────────
+def main():
+    """Run the bot"""
+    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
+        print("❌ Please set BOT_TOKEN in config.py or environment variables!")
+        return
+    
+    print("🤖 Starting Bridge to Success Bot...")
+    
+    # Create application
+    app = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add command handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("free", free_content))
+    app.add_handler(CommandHandler("mycourses", my_courses))
+    app.add_handler(CommandHandler("extract", extract_all))
+    app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("logout", logout))
+    
+    # Add login conversation handler
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("login", login_start),
@@ -352,38 +377,14 @@ def get_conversation_handler():
         per_message=False,
         per_chat=True,
     )
-    return conv_handler
-
-
-# ─── Main ──────────────────────────────────────────────────────────────
-def main():
-    """Run the bot"""
-    if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        print("❌ Please set BOT_TOKEN in config.py or environment variables!")
-        return
-    
-    # Create application
-    app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add command handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("free", free_content))
-    app.add_handler(CommandHandler("mycourses", my_courses))
-    app.add_handler(CommandHandler("extract", extract_all))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("logout", logout))
-    
-    # Add login conversation handler
-    app.add_handler(get_conversation_handler())
+    app.add_handler(conv_handler)
     
     # Add button handler
     app.add_handler(CallbackQueryHandler(button_handler))
     
-    # Start bot
-    print("🤖 Bridge to Success Bot is running...")
-    print("📱 Bot username: @" + app.bot.username if app.bot.username else "Unknown")
+    print("✅ Bot is ready!")
     
+    # Start polling (no username check)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
