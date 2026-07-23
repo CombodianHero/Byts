@@ -7,11 +7,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Telegram Bot Token
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8845555323:AAHzKabLkl1h1LuSQh5cYUYyVxslGHmmte8")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
 
 # API Configuration
 BASE_URL = "https://bridgetosuccess.learncentre.tech"
 API_BASE = f"{BASE_URL}/public/study_api_sprint13_security_promo/"
+
+# Alternative API bases (if the main one fails)
+API_BASE_ALT1 = f"{BASE_URL}/public/study_api_sprint13/"
+API_BASE_ALT2 = f"{BASE_URL}/public/study_api/"
+API_BASE_ALT3 = f"{BASE_URL}/api/"
 
 STORAGE_PDF = f"{BASE_URL}/public/storage/pdf/"
 STORAGE_VID = f"{BASE_URL}/public/storage/video/"
