@@ -50,13 +50,25 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
+def get_message(update: Update):
+    """Return the appropriate message object (from command or callback)."""
+    if update.message:
+        return update.message
+    elif update.callback_query and update.callback_query.message:
+        return update.callback_query.message
+    return None
+
+
 # ----------------------------------------------------------------------
 # Command / Callback handlers
 # ----------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message with main menu."""
     user = update.effective_user
-    await update.message.reply_text(
+    msg = get_message(update)
+    if msg is None:
+        return
+    await msg.reply_text(
         f"🎓 *Welcome to Bridge to Success Extractor, {user.first_name}!*\n\n"
         "I can extract videos and PDFs from the app.\n"
         "Choose an option below:",
@@ -67,7 +79,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show available commands."""
-    await update.message.reply_text(
+    msg = get_message(update)
+    if msg is None:
+        return
+    await msg.reply_text(
         "📖 *Commands*\n\n"
         "/start — Show main menu\n"
         "/free — Get free content (no login)\n"
@@ -83,7 +98,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def free_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Fetch free content without authentication."""
     user_id = update.effective_user.id
-    msg = update.message or update.callback_query.message
+    msg = get_message(update)
+    if msg is None:
+        return
 
     status_msg = await msg.reply_text("🔍 Fetching free content...")
 
@@ -102,7 +119,9 @@ async def free_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start the mobile + password login conversation."""
     user_id = update.effective_user.id
-    msg = update.message or update.callback_query.message
+    msg = get_message(update)
+    if msg is None:
+        return
 
     if user_id in user_sessions and user_sessions[user_id].get("token"):
         await msg.reply_text(
@@ -184,7 +203,9 @@ async def login_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def my_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the user's enrolled courses."""
     user_id = update.effective_user.id
-    msg = update.message or update.callback_query.message
+    msg = get_message(update)
+    if msg is None:
+        return
 
     if user_id not in user_sessions:
         await msg.reply_text("⚠️ Please /login first.")
@@ -212,7 +233,9 @@ async def my_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def extract_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Extract all content from the user's courses (authenticated)."""
     user_id = update.effective_user.id
-    msg = update.message or update.callback_query.message
+    msg = get_message(update)
+    if msg is None:
+        return
 
     if user_id not in user_sessions:
         await msg.reply_text("⚠️ Please /login first.")
@@ -268,10 +291,13 @@ async def extract_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the user's current session status."""
     user_id = update.effective_user.id
+    msg = get_message(update)
+    if msg is None:
+        return
 
     if user_id in user_sessions:
         session = user_sessions[user_id]
-        await update.message.reply_text(
+        await msg.reply_text(
             f"✅ *Logged In*\n\n"
             f"👤 Name: {session.get('name', 'N/A')}\n"
             f"📱 Mobile: {session.get('mobile', 'N/A')}\n"
@@ -279,13 +305,15 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     else:
-        await update.message.reply_text("❌ Not logged in. Use /login to authenticate.")
+        await msg.reply_text("❌ Not logged in. Use /login to authenticate.")
 
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Clear the user's session."""
     user_id = update.effective_user.id
-    msg = update.message or update.callback_query.message
+    msg = get_message(update)
+    if msg is None:
+        return
 
     if user_id in user_sessions:
         del user_sessions[user_id]
@@ -314,8 +342,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if action in handlers:
-        # The handlers expect update to have message or callback_query,
-        # we can call them directly.
+        # The handlers will use get_message(update) to get the correct message object
         await handlers[action](update, context)
     elif action == "back":
         await query.message.reply_text(
