@@ -6,23 +6,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Telegram Bot Token
-BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+# --- Telegram Bot Token ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8688500779:AAHjDQsLXyysrUCYqjEEsxbDIdw-yvpozMY")
 
-# API Configuration
+# --- API Configuration ---
 BASE_URL = "https://bridgetosuccess.learncentre.tech"
 API_BASE = f"{BASE_URL}/public/study_api_sprint13_security_promo/"
 
-# Alternative API bases (if the main one fails)
+# Fallback bases in case the primary changes
 API_BASE_ALT1 = f"{BASE_URL}/public/study_api_sprint13/"
 API_BASE_ALT2 = f"{BASE_URL}/public/study_api/"
 API_BASE_ALT3 = f"{BASE_URL}/api/"
 
+# Public storage paths (IDOR vulnerability used)
 STORAGE_PDF = f"{BASE_URL}/public/storage/pdf/"
 STORAGE_VID = f"{BASE_URL}/public/storage/video/"
 PLAYER_URL = "https://lctplayer.learncentre.online/v/player.php?v="
 LIVE_URL = "https://lctplayer.learncentre.online/live/live_player.php?v="
 
+# Headers mimicking the official Android app
 HEADERS = {
     "User-Agent": "okhttp/4.9.3",
     "Accept": "application/json",
@@ -30,14 +32,12 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-# All discovered endpoints
+# All known API endpoints (keys are friendly names)
 ENDPOINTS = {
     # Auth
-    "send_otp": "send-otp",
-    "verify_otp": "verify-otp",
     "login": "login",
     "register": "register",
-    
+
     # Courses
     "all_courses": "get-all-courses",
     "my_courses": "get-my-courses",
@@ -45,13 +45,13 @@ ENDPOINTS = {
     "course_detail": "get-course-detail",
     "categories": "get-categories",
     "category_courses": "get-category-courses",
-    
+
     # Content hierarchy
     "batch_list": "get-batch-list",
     "subject_list": "get-subject-list",
     "chapter_list": "get-chapter-list",
     "topic_list": "get-topic-list",
-    
+
     # Videos & PDFs
     "video_list": "get-video-list",
     "video_detail": "get-video-detail",
@@ -59,35 +59,35 @@ ENDPOINTS = {
     "pdf_detail": "get-pdf-detail",
     "free_videos": "get-free-video",
     "free_pdfs": "get-free-pdf",
-    
-    # Mixed content
+
+    # Mixed content (video + PDF + test)
     "mixed_content": "get-mixed-content",
-    
+
     # Live classes
     "live_classes": "get-live-class",
     "live_stream": "get-live-stream",
-    
+
     # Tests
     "test_series": "get-test-series",
     "test_list": "get-test-list",
     "test_detail": "get-test-detail",
-    
+
     # EBooks
     "ebook_list": "get-ebook-list",
     "ebook_series": "get-ebook-series",
-    
+
     # Doubts / Tickets
     "doubt_courses": "get-doubt-courses",
     "doubt_list": "get-doubt-list",
     "ticket_list": "get-ticket-list",
-    
+
     # Events
     "events": "get-events",
     "event_video": "get-event-video",
-    
+
     # Downloads
     "download_list": "get-download-list",
-    
+
     # News
     "news": "get-news",
     "board_result": "get-board-result",
