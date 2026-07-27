@@ -1,45 +1,44 @@
 """
 Bridge to Success Telegram Bot
-Supports both login and no-login content extraction
+Supports mobile + password login and no‑login free content extraction.
 """
 import logging
-import re
 from typing import Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, 
+    Application, CommandHandler, CallbackQueryHandler,
     ContextTypes, MessageHandler, filters, ConversationHandler
 )
 from config import BOT_TOKEN
 from extractor import BridgeExtractor, format_content_list, format_courses_list
 
-# ─── Logging ──────────────────────────────────────────────────────────────
+# --- Logging ---
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# ─── Conversation States ──────────────────────────────────────────────────
-(MOBILE, OTP) = range(2)
+# --- Conversation states ---
+MOBILE, PASSWORD = range(2)
 
-# ─── Session Storage ──────────────────────────────────────────────────────
+# --- In‑memory session storage (user_id → {token, mobile, name}) ---
 user_sessions: Dict[int, Dict] = {}
-# Structure: { user_id: {"token": str, "mobile": str, "name": str} }
 
 
-# ─── Helper Functions ────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------
 def get_extractor(user_id: int) -> BridgeExtractor:
-    """Get extractor instance for user (with or without token)"""
+    """Returns an extractor with the user's token (if logged in)."""
     token = None
     if user_id in user_sessions:
         token = user_sessions[user_id].get("token")
     return BridgeExtractor(token)
 
 
-# ─── Keyboard Builders ──────────────────────────────────────────────────
 def get_main_keyboard() -> InlineKeyboardMarkup:
-    """Build main menu keyboard"""
+    """Build the main menu keyboard."""
     keyboard = [
         [InlineKeyboardButton("🆓 Free Content (No Login)", callback_data="free")],
         [InlineKeyboardButton("🔑 Login", callback_data="login")],
@@ -51,9 +50,11 @@ def get_main_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(keyboard)
 
 
-# ─── Command Handlers ────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
+# Command / Callback handlers
+# ----------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome message with main menu"""
+    """Welcome message with main menu."""
     user = update.effective_user
     await update.message.reply_text(
         f"🎓 *Welcome to Bridge to Success Extractor, {user.first_name}!*\n\n"
@@ -65,12 +66,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show help message"""
+    """Show available commands."""
     await update.message.reply_text(
         "📖 *Commands*\n\n"
         "/start — Show main menu\n"
         "/free — Get free content (no login)\n"
-        "/login — Login with mobile OTP\n"
+        "/login — Login with mobile and password\n"
         "/mycourses — View your enrolled courses\n"
         "/extract — Extract all your content\n"
         "/status — Show your session status\n"
@@ -80,38 +81,36 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def free_content(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Fetch free content without login"""
+    """Fetch free content without authentication."""
     user_id = update.effective_user.id
     msg = update.message or update.callback_query.message
-    
+
     status_msg = await msg.reply_text("🔍 Fetching free content...")
-    
+
     extractor = get_extractor(user_id)
     items = extractor.fetch_free_content()
-    
+
     if not items:
         await status_msg.edit_text("ℹ️ No free content found.")
         return
-    
+
     await status_msg.edit_text(f"✅ Found *{len(items)}* free items:", parse_mode="Markdown")
-    
     for chunk in format_content_list(items):
         await msg.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
 
 
 async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start OTP login flow"""
+    """Start the mobile + password login conversation."""
     user_id = update.effective_user.id
     msg = update.message or update.callback_query.message
-    
-    # Check if already logged in
+
     if user_id in user_sessions and user_sessions[user_id].get("token"):
         await msg.reply_text(
             "✅ You are already logged in!\n"
             "Use /extract to get your content or /logout to clear session."
         )
         return
-    
+
     await msg.reply_text(
         "📱 Please enter your *registered mobile number*\n"
         "(10 digits, no country code):",
@@ -121,50 +120,42 @@ async def login_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_mobile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle mobile number input"""
-    user_id = update.effective_user.id
+    """Handle the mobile number input."""
     mobile = update.message.text.strip()
-    
+
     if not mobile.isdigit() or len(mobile) != 10:
         await update.message.reply_text("❌ Invalid mobile number. Enter 10 digits only.")
         return MOBILE
-    
+
     context.user_data["mobile"] = mobile
-    
-    # Send OTP
-    extractor = get_extractor(user_id)
-    resp = extractor.send_otp(mobile)
-    
-    if resp.get("status") == 1 or resp.get("success") is True:
-        await update.message.reply_text(
-            f"✅ OTP sent to {mobile}.\n"
-            "Please enter the *OTP* you received:",
-            parse_mode="Markdown"
-        )
-        return OTP
-    else:
-        await update.message.reply_text(
-            f"❌ Failed to send OTP: {resp.get('message', 'Unknown error')}"
-        )
-        return ConversationHandler.END
+
+    await update.message.reply_text(
+        "🔑 Please enter your *password*:\n"
+        "(It will be visible but not stored after login)",
+        parse_mode="Markdown"
+    )
+    return PASSWORD
 
 
-async def handle_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle OTP verification"""
+async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle password input, perform login, and store token."""
     user_id = update.effective_user.id
-    otp = update.message.text.strip()
+    password = update.message.text.strip()
     mobile = context.user_data.get("mobile", "")
-    
-    if not otp.isdigit():
-        await update.message.reply_text("❌ OTP must be digits only.")
-        return OTP
-    
+
+    if not password:
+        await update.message.reply_text("❌ Password cannot be empty. Please try again.")
+        return PASSWORD
+
+    # Perform login
     extractor = get_extractor(user_id)
-    result = extractor.login_with_otp(mobile, otp)
-    
+    await update.message.reply_text("⏳ Logging in...")
+
+    result = extractor.login_with_password(mobile, password)
+
     if result.get("success"):
         user_sessions[user_id] = {
-            "token": result.get("token"),
+            "token": result["token"],
             "mobile": mobile,
             "name": result.get("user", {}).get("name", mobile),
         }
@@ -178,37 +169,35 @@ async def handle_otp(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     else:
         await update.message.reply_text(
-            f"❌ Login failed: {result.get('message', 'Wrong OTP')}\n"
-            "Please try again or use /login to restart."
+            f"❌ Login failed: {result.get('message', 'Wrong credentials')}\n"
+            "Please try again with /login."
         )
         return ConversationHandler.END
 
 
 async def login_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel login flow"""
+    """Cancel the login conversation."""
     await update.message.reply_text("❌ Login cancelled.")
     return ConversationHandler.END
 
 
 async def my_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user's enrolled courses"""
+    """Show the user's enrolled courses."""
     user_id = update.effective_user.id
     msg = update.message or update.callback_query.message
-    
+
     if user_id not in user_sessions:
         await msg.reply_text("⚠️ Please /login first.")
         return
-    
+
     extractor = get_extractor(user_id)
     courses = extractor.get_my_courses()
-    
+
     if not courses:
         await msg.reply_text("ℹ️ No enrolled courses found.")
         return
-    
-    # Store courses in context for extraction
+
     context.user_data["courses"] = courses
-    
     await msg.reply_text(
         f"📚 *Your Courses ({len(courses)})*\n\n"
         "Use /extract to extract content from all courses.",
@@ -221,28 +210,27 @@ async def my_courses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def extract_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Extract all content from user's courses"""
+    """Extract all content from the user's courses (authenticated)."""
     user_id = update.effective_user.id
     msg = update.message or update.callback_query.message
-    
+
     if user_id not in user_sessions:
         await msg.reply_text("⚠️ Please /login first.")
         return
-    
+
     extractor = get_extractor(user_id)
-    
     status_msg = await msg.reply_text(
         "⚙️ Extracting all content...\n"
         "_This may take a few minutes._",
         parse_mode="Markdown"
     )
-    
+
     try:
         result = extractor.extract_all_user_content()
-        
+
         free_count = len(result.get("free", []))
         extracted_count = len(result.get("extracted", []))
-        
+
         await status_msg.edit_text(
             f"✅ *Extraction Complete!*\n\n"
             f"🆓 Free items: {free_count}\n"
@@ -251,36 +239,36 @@ async def extract_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Sending content now...",
             parse_mode="Markdown"
         )
-        
+
         # Send free content first
         if result.get("free"):
             await msg.reply_text("*🆓 FREE CONTENT:*", parse_mode="Markdown")
             for chunk in format_content_list(result["free"]):
                 await msg.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
-        
-        # Send extracted content
+
+        # Send extracted content (videos and PDFs separately)
         if result.get("extracted"):
             videos = [i for i in result["extracted"] if "VIDEO" in i["type"]]
             pdfs = [i for i in result["extracted"] if "PDF" in i["type"]]
-            
+
             if videos:
                 await msg.reply_text(f"*🎬 VIDEOS ({len(videos)})*", parse_mode="Markdown")
                 for chunk in format_content_list(videos):
                     await msg.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
-            
+
             if pdfs:
                 await msg.reply_text(f"*📄 PDFs ({len(pdfs)})*", parse_mode="Markdown")
                 for chunk in format_content_list(pdfs):
                     await msg.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
-        
+
     except Exception as e:
         await status_msg.edit_text(f"❌ Error: {str(e)}")
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user session status"""
+    """Show the user's current session status."""
     user_id = update.effective_user.id
-    
+
     if user_id in user_sessions:
         session = user_sessions[user_id]
         await update.message.reply_text(
@@ -295,10 +283,10 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Logout user"""
+    """Clear the user's session."""
     user_id = update.effective_user.id
     msg = update.message or update.callback_query.message
-    
+
     if user_id in user_sessions:
         del user_sessions[user_id]
         await msg.reply_text("🚪 Logged out successfully.")
@@ -306,27 +294,29 @@ async def logout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("ℹ️ You were not logged in.")
 
 
-# ─── Button Handler ──────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
+# Button dispatcher
+# ----------------------------------------------------------------------
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button presses"""
+    """Route inline keyboard callbacks to the appropriate handlers."""
     query = update.callback_query
     await query.answer()
-    
     action = query.data
-    
-    # Map button actions to functions
-    if action == "free":
-        await free_content(update, context)
-    elif action == "login":
-        await login_start(update, context)
-    elif action == "my_courses":
-        await my_courses(update, context)
-    elif action == "extract_all":
-        await extract_all(update, context)
-    elif action == "status":
-        await status_command(update, context)
-    elif action == "logout":
-        await logout(update, context)
+
+    # Map action to handler (we reuse the same async functions)
+    handlers = {
+        "free": free_content,
+        "login": login_start,
+        "my_courses": my_courses,
+        "extract_all": extract_all,
+        "status": status_command,
+        "logout": logout,
+    }
+
+    if action in handlers:
+        # The handlers expect update to have message or callback_query,
+        # we can call them directly.
+        await handlers[action](update, context)
     elif action == "back":
         await query.message.reply_text(
             "🎓 *Main Menu*",
@@ -337,19 +327,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("❌ Unknown action.")
 
 
-# ─── Main ──────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
+# Main
+# ----------------------------------------------------------------------
 def main():
-    """Run the bot"""
+    """Start the bot."""
     if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
         print("❌ Please set BOT_TOKEN in config.py or environment variables!")
         return
-    
+
     print("🤖 Starting Bridge to Success Bot...")
-    
-    # Create application
     app = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add command handlers
+
+    # Commands
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("free", free_content))
@@ -357,8 +347,8 @@ def main():
     app.add_handler(CommandHandler("extract", extract_all))
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("logout", logout))
-    
-    # Add login conversation handler
+
+    # Login conversation (mobile → password)
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("login", login_start),
@@ -366,7 +356,7 @@ def main():
         ],
         states={
             MOBILE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_mobile)],
-            OTP: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_otp)],
+            PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password)],
         },
         fallbacks=[
             CommandHandler("cancel", login_cancel),
@@ -376,13 +366,11 @@ def main():
         per_chat=True,
     )
     app.add_handler(conv_handler)
-    
-    # Add button handler
+
+    # Inline buttons
     app.add_handler(CallbackQueryHandler(button_handler))
-    
-    print("✅ Bot is ready!")
-    
-    # Start polling
+
+    print("✅ Bot is ready and polling for updates...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
