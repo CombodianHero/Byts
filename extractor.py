@@ -13,8 +13,8 @@ from config import (
 
 
 class BridgeExtractor:
-    """Main extractor class for Bridge to Success content"""
-    
+    """Handles all API communication and content extraction."""
+
     def __init__(self, token: Optional[str] = None):
         self.token = token
         self.session = requests.Session()
@@ -22,44 +22,63 @@ class BridgeExtractor:
         if token:
             self.session.headers["authtoken"] = token
             self.session.headers["Authorization"] = f"Bearer {token}"
-    
-    def _api_call(self, endpoint_key: str, method: str = "POST", data: Dict = None, params: Dict = None) -> Dict:
-        """Make API call with fallback to alternative bases"""
+
+    # ----------------------------------------------------------------------
+    # Internal API caller with fallback
+    # ----------------------------------------------------------------------
+    def _api_call(self, endpoint_key: str, method: str = "POST",
+                  data: Dict = None, params: Dict = None) -> Dict:
+        """
+        Attempts the API call on multiple base URLs and endpoint name variations.
+        Returns a dict (parsed JSON) or {'status':0, 'message':'...'} on failure.
+        """
         bases = [API_BASE, API_BASE_ALT1, API_BASE_ALT2, API_BASE_ALT3]
         endpoint = ENDPOINTS.get(endpoint_key, endpoint_key)
-        
-        # Try different endpoint name variations
-        endpoint_variations = [
+
+        # Variations: with/without hyphens, 'get-' prefix removal, etc.
+        variations = [
             endpoint,
             endpoint.replace("-", "_"),
             endpoint.replace("_", "-"),
             endpoint.replace("get-", ""),
             endpoint.replace("get_", ""),
         ]
-        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_variations = []
+        for v in variations:
+            if v not in seen:
+                seen.add(v)
+                unique_variations.append(v)
+
         for base in bases:
-            for ep in set(endpoint_variations):
+            for ep in unique_variations:
                 url = base + ep
                 try:
                     if method.upper() == "POST":
-                        resp = self.session.post(url, json=data, params=params, timeout=30)
+                        resp = self.session.post(url, json=data, params=params,
+                                                 timeout=30)
                     else:
                         resp = self.session.get(url, params=params, timeout=30)
-                    
+
                     if resp.status_code == 200:
                         result = resp.json()
+                        # Accept both 'status':1 or 'success':True
                         if result.get("status") == 1 or result.get("success") is True:
                             return result
-                        # If status is 0 but we got a response, it might still work
+                        # Some endpoints return data even with 'status':0
                         if "data" in result:
                             return result
-                except Exception as e:
+                except Exception:
                     continue
-        
+
         return {"status": 0, "message": "All API endpoints failed"}
-    
+
+    # ----------------------------------------------------------------------
+    # URL extractors
+    # ----------------------------------------------------------------------
     def _extract_video_url(self, video_data: Dict) -> str:
-        """Extract video URL from various response formats"""
+        """Try multiple fields to obtain the playable video URL."""
         fields = ["video_url", "videoUrl", "videoLink", "video_link", "hls_url",
                   "stream_url", "url", "file_url", "dash_url", "mp4_url", "link"]
         for f in fields:
@@ -75,10 +94,11 @@ class BridgeExtractor:
         if vid_id:
             return PLAYER_URL + str(vid_id)
         return "URL_NOT_FOUND"
-    
+
     def _extract_pdf_url(self, pdf_data: Dict) -> str:
-        """Extract PDF URL from various response formats"""
-        fields = ["pdf_url", "pdfUrl", "pdf_link", "file_url", "url", "pdf_file", "file", "link", "pdf_path"]
+        """Extract PDF download URL from multiple fields."""
+        fields = ["pdf_url", "pdfUrl", "pdf_link", "file_url", "url",
+                  "pdf_file", "file", "link", "pdf_path"]
         for f in fields:
             val = pdf_data.get(f)
             if val and isinstance(val, str) and len(val) > 3:
@@ -92,12 +112,14 @@ class BridgeExtractor:
         if pdf_name:
             return STORAGE_PDF + str(pdf_name)
         return "URL_NOT_FOUND"
-    
-    # ─── Free Content (No Login) ────────────────────────────────────────
+
+    # ----------------------------------------------------------------------
+    # Public (no‑login) content
+    # ----------------------------------------------------------------------
     def fetch_free_content(self) -> List[Dict]:
-        """Fetch free videos and PDFs without authentication"""
+        """Retrieve free videos and PDFs – no authentication required."""
         results = []
-        
+
         # Free videos
         fv = self._api_call("free_videos", method="GET")
         if fv.get("status") == 1 or "data" in fv:
@@ -111,7 +133,7 @@ class BridgeExtractor:
                     "url": self._extract_video_url(v),
                     "course": v.get("course_name") or "Free",
                 })
-        
+
         # Free PDFs
         fp = self._api_call("free_pdfs", method="GET")
         if fp.get("status") == 1 or "data" in fp:
@@ -125,56 +147,45 @@ class BridgeExtractor:
                     "url": self._extract_pdf_url(p),
                     "course": p.get("course_name") or "Free",
                 })
-        
+
         return results
-    
-    # ─── Authentication ──────────────────────────────────────────────────
-    def send_otp(self, mobile: str) -> Dict:
-        """Send OTP to mobile number"""
-        # Try different payload formats
+
+    # ----------------------------------------------------------------------
+    # Authentication (mobile + password)
+    # ----------------------------------------------------------------------
+    def login_with_password(self, mobile: str, password: str) -> Dict:
+        """
+        Attempt login using mobile number and password.
+        Returns {'success': bool, 'token': str, 'user': dict} or error.
+        """
+        # Try different payload formats and endpoint names
         payloads = [
-            {"mobile": mobile, "type": "login"},
-            {"mobile": mobile, "type": "register"},
-            {"mobile": mobile},
-            {"phone": mobile, "type": "login"},
-            {"phone": mobile},
+            {"mobile": mobile, "password": password},
+            {"mobile": mobile, "password": password, "type": "login"},
+            {"phone": mobile, "password": password},
+            {"username": mobile, "password": password},
         ]
-        
-        for payload in payloads:
-            result = self._api_call("send_otp", data=payload)
-            if result.get("status") == 1 or result.get("success") is True:
-                return result
-        
-        return {"status": 0, "message": "Could not send OTP"}
-    
-    def login_with_otp(self, mobile: str, otp: str) -> Dict:
-        """Login with OTP and get token"""
-        # Try different login endpoints
-        endpoints = ["login", "verify_otp", "verify-otp"]
-        payloads = [
-            {"mobile": mobile, "otp": otp},
-            {"phone": mobile, "otp": otp},
-            {"mobile": mobile, "otp": otp, "type": "login"},
-        ]
-        
+        endpoints = ["login", "signin", "authenticate"]
+
         for endpoint in endpoints:
             for payload in payloads:
-                # Temporarily override the endpoint
                 result = self._api_call(endpoint, data=payload)
                 if result.get("status") == 1 or result.get("success") is True:
                     data = result.get("data", {})
                     token = data.get("token") or data.get("authtoken") or data.get("api_token")
                     if token:
                         return {"success": True, "token": token, "user": data}
-        
-        return {"success": False, "message": "Login failed"}
-    
-    # ─── Course Extraction ──────────────────────────────────────────────
+
+        return {"success": False, "message": "Login failed. Check credentials or network."}
+
+    # ----------------------------------------------------------------------
+    # Course retrieval (authenticated)
+    # ----------------------------------------------------------------------
     def get_my_courses(self) -> List[Dict]:
-        """Get user's enrolled courses (requires auth)"""
+        """Get user's enrolled courses – requires valid token."""
         if not self.token:
             return []
-        
+
         resp = self._api_call("my_courses", method="GET")
         if resp.get("status") != 1 and "data" not in resp:
             return []
@@ -182,9 +193,9 @@ class BridgeExtractor:
         if isinstance(data, dict):
             data = list(data.values())
         return data
-    
+
     def get_all_courses(self) -> List[Dict]:
-        """Get all available courses (may or may not require auth)"""
+        """Get all available courses (may work without token)."""
         resp = self._api_call("all_courses", method="GET")
         if resp.get("status") != 1 and "data" not in resp:
             return []
@@ -192,54 +203,66 @@ class BridgeExtractor:
         if isinstance(data, dict):
             data = list(data.values())
         return data
-    
+
+    # ----------------------------------------------------------------------
+    # Full course content extraction (videos + PDFs)
+    # ----------------------------------------------------------------------
     def extract_course_full(self, course: Dict) -> List[Dict]:
-        """Extract ALL content from a course: videos, PDFs, mixed content"""
+        """
+        Walk the hierarchy (batches → subjects → chapters → videos/PDFs)
+        and return a flat list of items.
+        """
         results = []
         course_id = course.get("id") or course.get("course_id")
         course_name = course.get("name") or course.get("course_name") or f"Course-{course_id}"
-        
-        # Get batches
+
+        # Fetch batches
         batch_resp = self._api_call("batch_list", data={"course_id": course_id})
         batches = batch_resp.get("data", [])
         if isinstance(batches, dict):
             batches = list(batches.values())
         if not batches:
+            # Fallback: try course_detail
             detail = self._api_call("course_detail", data={"course_id": course_id})
             batches = detail.get("data", {}).get("batch", [])
         if not batches:
             return results
-        
+
         for b in batches:
             batch_id = b.get("id") or b.get("batch_id")
             batch_name = b.get("name") or b.get("batch_name") or f"Batch-{batch_id}"
-            
-            # Get subjects
-            subj_resp = self._api_call("subject_list", data={"course_id": course_id, "batch_id": batch_id})
+
+            # Subjects
+            subj_resp = self._api_call("subject_list",
+                                       data={"course_id": course_id, "batch_id": batch_id})
             subjects = subj_resp.get("data", [])
             if isinstance(subjects, dict):
                 subjects = list(subjects.values())
-            
+
             for s in subjects:
                 subj_id = s.get("id") or s.get("subject_id")
                 subj_name = s.get("name") or s.get("subject_name") or f"Subject-{subj_id}"
-                
-                # Get chapters
+
+                # Chapters
                 chap_resp = self._api_call("chapter_list", data={
-                    "course_id": course_id, "batch_id": batch_id, "subject_id": subj_id
+                    "course_id": course_id,
+                    "batch_id": batch_id,
+                    "subject_id": subj_id
                 })
                 chapters = chap_resp.get("data", [])
                 if isinstance(chapters, dict):
                     chapters = list(chapters.values())
-                
+
                 for ch in chapters:
                     ch_id = ch.get("id") or ch.get("chapter_id")
                     ch_name = ch.get("name") or ch.get("chapter_name") or f"Chapter-{ch_id}"
-                    
-                    # Videos
+
+                    # --- Videos ---
                     vid_resp = self._api_call("video_list", data={
-                        "course_id": course_id, "batch_id": batch_id,
-                        "subject_id": subj_id, "chapter_id": ch_id
+                        "course_id": course_id,
+                        "batch_id": batch_id,
+                        "subject_id": subj_id,
+                        "chapter_id": ch_id
                     })
                     videos = vid_resp.get("data", [])
                     if isinstance(videos, dict):
@@ -255,11 +278,13 @@ class BridgeExtractor:
                             "url": self._extract_video_url(v),
                             "duration": v.get("duration") or v.get("video_duration") or "",
                         })
-                    
-                    # PDFs
+
+                    # --- PDFs ---
                     pdf_resp = self._api_call("pdf_list", data={
-                        "course_id": course_id, "batch_id": batch_id,
-                        "subject_id": subj_id, "chapter_id": ch_id
+                        "course_id": course_id,
+                        "batch_id": batch_id,
+                        "subject_id": subj_id,
+                        "chapter_id": ch_id
                     })
                     pdfs = pdf_resp.get("data", [])
                     if isinstance(pdfs, dict):
@@ -274,26 +299,33 @@ class BridgeExtractor:
                             "title": p.get("title") or p.get("name") or "Untitled",
                             "url": self._extract_pdf_url(p),
                         })
-                    
+
+                    # Polite delay
                     time.sleep(0.15)
                 time.sleep(0.15)
             time.sleep(0.15)
-        
+
         return results
-    
+
+    # ----------------------------------------------------------------------
+    # Combined extraction for a logged‑in user
+    # ----------------------------------------------------------------------
     def extract_all_user_content(self) -> Dict[str, List]:
-        """Extract all content for logged-in user"""
+        """
+        Fetch free content, my courses (if authenticated), and all courses.
+        Returns a dict with 'free', 'my_courses', 'all_courses', 'extracted'.
+        """
         result = {
             "free": [],
             "my_courses": [],
             "all_courses": [],
             "extracted": []
         }
-        
-        # Free content (always available)
+
+        # 1. Free content – always available
         result["free"] = self.fetch_free_content()
-        
-        # My courses (requires auth)
+
+        # 2. My courses – requires token
         if self.token:
             my_courses = self.get_my_courses()
             if my_courses:
@@ -301,8 +333,8 @@ class BridgeExtractor:
                 for course in my_courses:
                     extracted = self.extract_course_full(course)
                     result["extracted"].extend(extracted)
-        
-        # All courses (try without auth first)
+
+        # 3. All courses (if my_courses failed or we have no token)
         if not result["my_courses"]:
             all_courses = self.get_all_courses()
             if all_courses:
@@ -310,17 +342,21 @@ class BridgeExtractor:
                 for course in all_courses:
                     extracted = self.extract_course_full(course)
                     result["extracted"].extend(extracted)
-        
+
         return result
 
 
-# ─── Utility functions ──────────────────────────────────────────────────
-
+# ----------------------------------------------------------------------
+# Helper functions for formatting Telegram messages
+# ----------------------------------------------------------------------
 def format_content_list(items: List[Dict], max_chars: int = 4000) -> List[str]:
-    """Format content list into Telegram-safe message chunks"""
+    """
+    Splits a list of content items into chunks that fit within Telegram's
+    message length limit.
+    """
     chunks = []
     current = ""
-    
+
     for i, item in enumerate(items, 1):
         icon = "🎬" if "VIDEO" in item["type"] else "📄"
         line = f"{icon} *{i}. {item['title']}*\n"
@@ -332,27 +368,25 @@ def format_content_list(items: List[Dict], max_chars: int = 4000) -> List[str]:
         if item.get("chapter"):
             line += f" → {item.get('chapter', '')}"
         line += f"\n   🔗 `{item.get('url', 'NO_URL')}`\n\n"
-        
+
         if len(current) + len(line) > max_chars:
             chunks.append(current)
             current = line
         else:
             current += line
-    
+
     if current:
         chunks.append(current)
-    
+
     return chunks if chunks else ["No content found."]
 
 
 def format_courses_list(courses: List[Dict]) -> str:
-    """Format courses list for display"""
+    """Simple bullet list of courses."""
     if not courses:
         return "No courses found."
-    
     lines = ["📚 *Available Courses:*\n"]
     for i, c in enumerate(courses, 1):
         name = c.get("name") or c.get("course_name") or f"Course-{c.get('id')}"
         lines.append(f"{i}. {name}")
-    
     return "\n".join(lines)
