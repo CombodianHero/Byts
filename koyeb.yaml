@@ -1,3 +1,4 @@
+# Koyeb Deployment Configuration
 name: bridge-telegram-bot
 region: fra
 scale:
@@ -12,7 +13,7 @@ docker:
 
 env:
   - key: BOT_TOKEN
-    value: "YOUR_BOT_TOKEN_HERE"
+    value: "8688500779:AAHjDQsLXyysrUCYqjEEsxbDIdw-yvpozMY"
     secret: true
 
 checks:
