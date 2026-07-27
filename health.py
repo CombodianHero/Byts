@@ -1,5 +1,5 @@
 """
-Health check endpoint for Koyeb
+Simple HTTP health check server for Koyeb.
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
